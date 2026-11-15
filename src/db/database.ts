@@ -3,7 +3,7 @@ import {
   Wallet, IncomeSource, Student, Lesson, Transaction,
   ExpenseCategory, Obligation, AppSettings,
   WalletType, TransactionType,
-  CenterStudent, StudentSession, StudentPayment, CenterSettlement, CenterGroupSession
+  CenterStudent, StudentSession, StudentPayment, CenterSettlement, CenterGroupSession, CenterCycleStats
 } from './types';
 
 const STORAGE_KEYS = {
@@ -638,7 +638,7 @@ export function addStudentPayment(payment: Omit<StudentPayment, 'id' | 'createdA
   const payments = getStore<StudentPayment>(CENTER_KEYS.payments);
   const pId = generateId();
   const p: StudentPayment = { ...payment, id: pId, createdAt: new Date().toISOString() };
-  
+
   // If received by me, add to wallet and create Income Transaction
   if (p.receivedBy === 'me' && p.walletId) {
     const amountToWallet = p.myShare != null ? p.myShare : p.amount;
@@ -691,7 +691,7 @@ export function addCenterSettlement(settlement: Omit<CenterSettlement, 'id' | 'c
   const settlements = getStore<CenterSettlement>(CENTER_KEYS.settlements);
   const sId = generateId();
   const s: CenterSettlement = { ...settlement, id: sId, createdAt: new Date().toISOString() };
-  
+
   // Add to wallet and create Income Transaction
   adjustWalletBalance(s.walletId, s.amount);
 
@@ -747,6 +747,64 @@ export function addCenterGroupSession(session: Omit<CenterGroupSession, 'id' | '
 export function deleteCenterGroupSession(id: string): void {
   const sessions = getStore<CenterGroupSession>(CENTER_KEYS.groupSessions);
   setStore(CENTER_KEYS.groupSessions, sessions.filter(s => s.id !== id));
+}
+
+// ==================== Center 8-Session Cycle Tracker ====================
+
+export function getCenterCycleStats(centerId: string): CenterCycleStats {
+  const groupSessions = getCenterGroupSessions(centerId);
+  const studentSessions = getStudentSessions(centerId).filter(s => s.status === 'completed');
+  
+  // Total distinct sessions given at this center:
+  // Can be group sessions count or distinct session dates from student sessions
+  const distinctDates = new Set(studentSessions.map(s => s.date));
+  const totalSessions = Math.max(groupSessions.length, distinctDates.size);
+
+  const completedCycles = Math.floor(totalSessions / 8);
+  const cycleNumber = totalSessions === 0 ? 1 : Math.floor((totalSessions - 1) / 8) + 1;
+  const sessionInCycle = totalSessions === 0 ? 0 : ((totalSessions - 1) % 8) + 1;
+  const hasPassed8 = totalSessions >= 8;
+
+  const payments = getStudentPayments(centerId);
+  const settlements = getCenterSettlements(centerId);
+  const totalSettled = settlements.reduce((sum, s) => sum + s.amount, 0);
+
+  const isFarouk = centerId === 'src_farouk';
+  const isCenterPays = centerId === 'src_manara' || centerId === 'src_roya';
+  const is4Geeks = centerId === 'src_4geeks';
+
+  let owedToMe = 0;
+  let totalEarned = 0;
+
+  if (isFarouk) {
+    const paidToCenterMyShare = payments
+      .filter(p => p.receivedBy === 'center')
+      .reduce((sum, p) => sum + (p.myShare ?? p.amount), 0);
+    owedToMe = Math.max(0, paidToCenterMyShare - totalSettled);
+    totalEarned = studentSessions.reduce((sum, s) => sum + s.amountEarned, 0);
+  } else if (isCenterPays) {
+    totalEarned = studentSessions.reduce((sum, s) => sum + s.amountEarned, 0);
+    owedToMe = Math.max(0, totalEarned - totalSettled);
+  } else if (is4Geeks) {
+    const paidTotal = payments.reduce((sum, p) => sum + p.amount, 0);
+    totalEarned = studentSessions.reduce((sum, s) => sum + s.amountEarned, 0);
+    owedToMe = Math.max(0, totalEarned - paidTotal);
+  } else {
+    totalEarned = studentSessions.reduce((sum, s) => sum + s.amountEarned, 0);
+    owedToMe = Math.max(0, totalEarned - totalSettled);
+  }
+
+  return {
+    centerId,
+    totalSessions,
+    cycleNumber,
+    sessionInCycle,
+    hasPassed8,
+    completedCycles,
+    owedToMe,
+    totalEarned,
+    totalSettled,
+  };
 }
 
 // Reconcile any past payments or settlements created before this update

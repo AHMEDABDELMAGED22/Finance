@@ -174,3 +174,15 @@ export interface CenterGroupSession {
   notes?: string;
   createdAt: string;
 }
+
+export interface CenterCycleStats {
+  centerId: string;
+  totalSessions: number;
+  cycleNumber: number;
+  sessionInCycle: number;
+  hasPassed8: boolean;
+  completedCycles: number;
+  owedToMe: number;
+  totalEarned: number;
+  totalSettled: number;
+}

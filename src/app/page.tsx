@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import * as db from '@/db/database';
 import { useApp } from '@/contexts/AppContext';
 import { formatCurrency, formatDate, getToday, getDaysUntil, getWalletIcon } from '@/lib/utils';
 import Modal from '@/components/Modal';
@@ -32,6 +33,24 @@ export default function Dashboard() {
     if (txnFilter === 'expense') return sortedTransactions.filter(t => t.type === 'expense');
     return sortedTransactions;
   }, [sortedTransactions, txnFilter]);
+
+  // Centers that passed 8 sessions and have pending money owed to tutor
+  const centersPassed8 = useMemo(() => {
+    const centers = ['src_farouk', 'src_manara', 'src_roya', 'src_4geeks'];
+    return centers
+      .map(cId => {
+        const stats = db.getCenterCycleStats(cId);
+        const src = app.incomeSources.find(s => s.id === cId);
+        return {
+          id: cId,
+          name: src?.nameAr || cId,
+          hasPassed8: stats.hasPassed8,
+          owed: stats.owedToMe,
+          cycles: stats.completedCycles,
+        };
+      })
+      .filter(c => c.hasPassed8 && c.owed > 0);
+  }, [app.incomeSources, app.transactions]);
 
   return (
     <div className="px-4 pt-6 pb-24 space-y-4">
@@ -132,6 +151,27 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      {/* Passed 8-Sessions Alert on Dashboard */}
+      {centersPassed8.length > 0 && (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 rounded-xl p-3 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+              <span>🎉</span> سناتر تجاوزت 8 حصص وبانتظار التسوية:
+            </span>
+            <span className="text-xs font-black text-amber-900">
+              {formatCurrency(centersPassed8.reduce((s, c) => s + c.owed, 0))}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {centersPassed8.map(c => (
+              <span key={c.id} className="bg-white text-amber-900 border border-amber-200 text-[11px] px-2 py-0.5 rounded-lg font-bold">
+                {c.name}: {formatCurrency(c.owed)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Quick Actions */}
       <div className="grid grid-cols-2 gap-3">

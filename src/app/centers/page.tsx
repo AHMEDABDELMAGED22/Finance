@@ -4,7 +4,8 @@ import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import * as db from '@/db/database';
 import { formatCurrency } from '@/lib/utils';
-import { IncomeSource } from '@/db/types';
+import CenterSessionMeter from '@/components/CenterSessionMeter';
+import { IncomeSource, CenterCycleStats } from '@/db/types';
 
 const CENTER_IDS = ['src_farouk', 'src_manara', 'src_roya', 'src_4geeks'];
 
@@ -26,12 +27,20 @@ export default function CentersPage() {
 
   const centerStats = useMemo(() => {
     if (!mounted) return {};
-    const stats: Record<string, { students: number; owed: number; collected: number; outstanding: number }> = {};
+    const stats: Record<string, {
+      students: number;
+      owed: number;
+      collected: number;
+      outstanding: number;
+      cycleStats: CenterCycleStats;
+    }> = {};
+
     CENTER_IDS.forEach(cId => {
       const students = db.getCenterStudents(cId).filter(s => s.isActive);
       const sessions = db.getStudentSessions(cId).filter(s => s.status === 'completed');
       const payments = db.getStudentPayments(cId);
       const settlements = db.getCenterSettlements(cId);
+      const cycleStats = db.getCenterCycleStats(cId);
 
       const totalEarned = sessions.reduce((s, ses) => s + ses.amountEarned, 0);
       const paidToMe = payments.filter(p => p.receivedBy === 'me').reduce((s, p) => s + (p.myShare ?? p.amount), 0);
@@ -43,17 +52,66 @@ export default function CentersPage() {
         owed: totalEarned,
         collected: paidToMe + settledByCenter,
         outstanding: paidToCenter - settledByCenter,
+        cycleStats,
       };
     });
     return stats;
   }, [mounted]);
 
+  // Centers that passed 8 sessions and have pending money
+  const centersPassed8 = useMemo(() => {
+    if (!mounted) return [];
+    return sources
+      .map(src => {
+        const cs = centerStats[src.id]?.cycleStats;
+        return {
+          id: src.id,
+          name: src.nameAr,
+          hasPassed8: cs?.hasPassed8 || false,
+          owed: cs?.owedToMe || 0,
+          cycles: cs?.completedCycles || 0,
+        };
+      })
+      .filter(c => c.hasPassed8 && c.owed > 0);
+  }, [sources, centerStats, mounted]);
+
+  const totalOwedFromPassed8 = centersPassed8.reduce((s, c) => s + c.owed, 0);
+
   if (!mounted) return null;
 
   return (
     <div className="px-4 pt-6 pb-24 space-y-4">
-      <h1 className="text-xl font-bold text-gray-800">🏫 السناتر</h1>
-      <p className="text-sm text-gray-500">إدارة الطلبة والتحصيل</p>
+      <div>
+        <h1 className="text-xl font-bold text-gray-800">🏫 السناتر</h1>
+        <p className="text-sm text-gray-500">إدارة الطلبة ودورات الحصص (8 حصص/دورة)</p>
+      </div>
+
+      {/* Alert banner if any center passed 8 sessions */}
+      {centersPassed8.length > 0 && (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-300 rounded-2xl p-4 space-y-2 shadow-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🎉</span>
+            <div>
+              <p className="font-extrabold text-amber-900 text-sm">
+                سناتر تجاوزت 8 حصص وبانتظار تسوية الحساب:
+              </p>
+              <p className="text-xs text-amber-800">
+                إجمالي مستحقاتك لدى هذه السناتر: <strong>{formatCurrency(totalOwedFromPassed8)}</strong>
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 pt-1">
+            {centersPassed8.map(c => (
+              <span
+                key={c.id}
+                className="bg-white text-amber-900 border border-amber-300 text-xs px-2.5 py-1 rounded-lg font-bold shadow-xs"
+              >
+                {c.name}: {formatCurrency(c.owed)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-3">
         {sources.map(src => {
@@ -65,18 +123,25 @@ export default function CentersPage() {
 
           return (
             <Link key={src.id} href={`/centers/${src.id}`}
-              className="block bg-white rounded-2xl p-5 shadow-sm border border-gray-100 active:bg-gray-50 transition-colors">
+              className="block bg-white rounded-2xl p-5 shadow-sm border border-gray-100 hover:border-indigo-200 active:bg-gray-50 transition-all">
               <div className="flex items-start gap-4">
                 <span className="text-3xl">{centerIcons[src.id] || '🏫'}</span>
-                <div className="flex-1">
-                  <h2 className="text-lg font-bold text-gray-800">{src.nameAr}</h2>
-                  <p className="text-xs text-gray-500 mb-3">{typeLabel}</p>
+                <div className="flex-1 space-y-3">
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-800">{src.nameAr}</h2>
+                    <p className="text-xs text-gray-500">{typeLabel}</p>
+                  </div>
+
+                  {/* 8-Session Cycle Progress Indicator */}
+                  {stats?.cycleStats && (
+                    <CenterSessionMeter stats={stats.cycleStats} compact={true} />
+                  )}
 
                   {stats && (
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-2 pt-1">
                       <div className="bg-gray-50 rounded-lg p-2 text-center">
                         <p className="text-lg font-bold text-gray-700">{stats.students}</p>
-                        <p className="text-[10px] text-gray-500">طالب</p>
+                        <p className="text-[10px] text-gray-500">طالب نشط</p>
                       </div>
                       <div className="bg-green-50 rounded-lg p-2 text-center">
                         <p className="text-sm font-bold text-green-700">{formatCurrency(stats.collected)}</p>
@@ -85,7 +150,7 @@ export default function CentersPage() {
                       {stats.outstanding > 0 && (
                         <div className="bg-amber-50 rounded-lg p-2 text-center col-span-2">
                           <p className="text-sm font-bold text-amber-700">{formatCurrency(stats.outstanding)}</p>
-                          <p className="text-[10px] text-amber-600">مستحق لدى السنتر</p>
+                          <p className="text-[10px] text-amber-600">مستحق طرف السنتر</p>
                         </div>
                       )}
                     </div>

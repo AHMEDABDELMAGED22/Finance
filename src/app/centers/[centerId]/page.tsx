@@ -5,8 +5,9 @@ import { useParams, useRouter } from 'next/navigation';
 import * as db from '@/db/database';
 import { formatCurrency, formatDate, getToday, getWalletIcon } from '@/lib/utils';
 import Modal from '@/components/Modal';
+import CenterSessionMeter from '@/components/CenterSessionMeter';
 import { useApp } from '@/contexts/AppContext';
-import { IncomeSource, CenterStudent, StudentSession, StudentPayment, CenterSettlement, CenterGroupSession, Wallet, Transaction } from '@/db/types';
+import { IncomeSource, CenterStudent, StudentSession, StudentPayment, CenterSettlement, CenterGroupSession, CenterCycleStats, Wallet, Transaction } from '@/db/types';
 
 type Tab = 'students' | 'sessions' | 'reports' | 'settlements' | 'rentals';
 type PaymentFilter = 'all' | 'paid' | 'partial' | 'unpaid' | 'unknown';
@@ -201,6 +202,11 @@ export default function CenterDetailPage() {
     return active.filter(s => studentStats[s.id]?.status === paymentFilter);
   }, [students, isFarouk, selectedGroup, paymentFilter, studentStats]);
 
+  // 8-Session Cycle Stats & Owed calculation
+  const cycleStats = useMemo(() => {
+    return db.getCenterCycleStats(centerId);
+  }, [centerId, groupSessions, sessions, payments, settlements]);
+
   if (!mounted || !source) return null;
 
   return (
@@ -224,6 +230,14 @@ export default function CenterDetailPage() {
           + طالب
         </button>
       </div>
+
+      {/* 8-Session Cycle Progress Meter & Passed 8-Sessions Owed Alert */}
+      <CenterSessionMeter
+        stats={cycleStats}
+        centerName={source.nameAr}
+        onAddSession={() => setShowAddGroupSession(true)}
+        onSettle={(isCenterPays || isFarouk) ? () => setShowSettlement(true) : undefined}
+      />
 
       {/* Main Center Summary Card */}
       <div className={`rounded-2xl p-4 text-white shadow-lg ${
@@ -608,11 +622,12 @@ export default function CenterDetailPage() {
         />
       )}
 
-      {/* Group Sessions Tab (4GEEKS & classes) */}
+      {/* Group Sessions Tab */}
       {tab === 'sessions' && (
         <GroupSessionsSection
           sessions={groupSessions}
           students={students}
+          sourceName={source.nameAr}
           onAdd={() => setShowAddGroupSession(true)}
           onDelete={(id) => { db.deleteCenterGroupSession(id); handleMutation(); }}
         />
@@ -1452,15 +1467,17 @@ function SettlementModal({ centerId, sourceName, wallets, onClose }: {
   );
 }
 
-// ============== Group Sessions Section (4GEEKS & classes) ==============
+// ============== Group Sessions Section ==============
 function GroupSessionsSection({
   sessions,
   students,
+  sourceName,
   onAdd,
   onDelete,
 }: {
   sessions: CenterGroupSession[];
   students: CenterStudent[];
+  sourceName: string;
   onAdd: () => void;
   onDelete: (id: string) => void;
 }) {
@@ -1470,7 +1487,7 @@ function GroupSessionsSection({
       <div className="bg-gradient-to-r from-purple-800 to-indigo-900 rounded-2xl p-4 text-white shadow-sm space-y-2">
         <div className="flex justify-between items-center">
           <div>
-            <h3 className="font-extrabold text-base">سجل وجدول حصص 4GEEKS</h3>
+            <h3 className="font-extrabold text-base">سجل وجدول حصص {sourceName}</h3>
             <p className="text-xs text-purple-200 mt-0.5">
               {sessions.length > 0 ? `تم إعطاء ${sessions.length} حصص حتى الآن` : 'لا توجد حصص مسجلة بعد'}
             </p>
@@ -1602,11 +1619,13 @@ function AddGroupSessionModal({
     ? Math.max(...existingSessions.map(s => s.sessionNumber)) + 1 
     : 1;
 
+  const hasRoomRental = centerId === 'src_4geeks' || Boolean(source?.roomRental && source.roomRental > 0);
+
   const [sessionNumber, setSessionNumber] = useState(String(nextNumber));
   const [date, setDate] = useState(getToday());
   const [topic, setTopic] = useState('');
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>(students.map(s => s.id));
-  const [deductRoomRental, setDeductRoomRental] = useState(true);
+  const [deductRoomRental, setDeductRoomRental] = useState(hasRoomRental);
   const [rentalWalletId, setRentalWalletId] = useState('wallet_cash');
   const [notes, setNotes] = useState('');
 
@@ -1621,8 +1640,8 @@ function AddGroupSessionModal({
 
   const handleSave = () => {
     const num = parseInt(sessionNumber) || nextNumber;
-    const roomRentalRate = source?.roomRental || 40;
-    const rentalAmount = deductRoomRental ? roomRentalRate : undefined;
+    const roomRentalRate = source?.roomRental || (centerId === 'src_4geeks' ? 40 : 0);
+    const rentalAmount = (hasRoomRental && deductRoomRental) ? roomRentalRate : undefined;
 
     // 1. Add Group Session record
     db.addCenterGroupSession({
@@ -1650,14 +1669,14 @@ function AddGroupSessionModal({
     });
 
     // 3. Deduct room rental as an expense transaction if chosen
-    if (deductRoomRental) {
+    if (hasRoomRental && deductRoomRental && roomRentalRate > 0) {
       db.addExpense(
         roomRentalRate,
         'إيجار قاعة',
         rentalWalletId,
         date,
-        `إيجار قاعة 4GEEKS - الحصة رقم #${num}`,
-        'src_4geeks'
+        `إيجار قاعة ${source?.nameAr || ''} - الحصة رقم #${num}`,
+        centerId
       );
     }
 
@@ -1665,7 +1684,7 @@ function AddGroupSessionModal({
   };
 
   return (
-    <Modal isOpen={true} onClose={onClose} title="📅 تسجيل حصة جديدة في 4GEEKS">
+    <Modal isOpen={true} onClose={onClose} title={`📅 تسجيل حصة جديدة — ${source?.nameAr || 'السنتر'}`}>
       <div className="space-y-4">
         {/* Session Number & Date */}
         <div className="grid grid-cols-2 gap-3">
@@ -1750,38 +1769,40 @@ function AddGroupSessionModal({
           </div>
         </div>
 
-        {/* Room Rental Option */}
-        <div className="bg-purple-50 p-3 rounded-xl border border-purple-200 space-y-2">
-          <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-purple-900">
-            <input
-              type="checkbox"
-              checked={deductRoomRental}
-              onChange={e => setDeductRoomRental(e.target.checked)}
-              className="rounded text-purple-600 focus:ring-purple-500 w-4 h-4"
-            />
-            <span>خصم إيجار القاعة لهذه الحصة ({source?.roomRental || 40} ج.م)</span>
-          </label>
+        {/* Room Rental Option (Only for centers with room rental, e.g. 4GEEKS) */}
+        {hasRoomRental && (
+          <div className="bg-purple-50 p-3 rounded-xl border border-purple-200 space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-purple-900">
+              <input
+                type="checkbox"
+                checked={deductRoomRental}
+                onChange={e => setDeductRoomRental(e.target.checked)}
+                className="rounded text-purple-600 focus:ring-purple-500 w-4 h-4"
+              />
+              <span>خصم إيجار القاعة لهذه الحصة ({source?.roomRental || 40} ج.م)</span>
+            </label>
 
-          {deductRoomRental && (
-            <div>
-              <p className="text-[11px] text-purple-700 mb-1">دفع إيجار القاعة من محفظة:</p>
-              <div className="grid grid-cols-3 gap-1.5">
-                {wallets.map(w => (
-                  <button
-                    key={w.id}
-                    type="button"
-                    onClick={() => setRentalWalletId(w.id)}
-                    className={`p-2 rounded-lg text-center text-[11px] font-bold transition-all ${
-                      rentalWalletId === w.id ? 'bg-purple-600 text-white' : 'bg-white text-gray-700 border border-purple-100'
-                    }`}
-                  >
-                    <span>{getWalletIcon(w.type)}</span> {w.name}
-                  </button>
-                ))}
+            {deductRoomRental && (
+              <div>
+                <p className="text-[11px] text-purple-700 mb-1">دفع إيجار القاعة من محفظة:</p>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {wallets.map(w => (
+                    <button
+                      key={w.id}
+                      type="button"
+                      onClick={() => setRentalWalletId(w.id)}
+                      className={`p-2 rounded-lg text-center text-[11px] font-bold transition-all ${
+                        rentalWalletId === w.id ? 'bg-purple-600 text-white' : 'bg-white text-gray-700 border border-purple-100'
+                      }`}
+                    >
+                      <span>{getWalletIcon(w.type)}</span> {w.name}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {/* Notes */}
         <div>
