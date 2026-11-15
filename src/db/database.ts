@@ -254,16 +254,21 @@ export function addTransaction(txn: Omit<Transaction, 'id' | 'createdAt'>): Tran
   return newTxn;
 }
 
-export function addExpense(amount: number, category: string, walletId: string, date: string, description?: string): Transaction {
+export function addExpense(amount: number, category: string, walletId: string, date: string, description?: string, incomeSourceId?: string): Transaction {
   adjustWalletBalance(walletId, -amount);
   return addTransaction({
     type: 'expense',
     amount,
     category,
     walletId,
+    incomeSourceId,
     date,
     description: description || category,
   });
+}
+
+export function getCenterExpenses(centerId: string): Transaction[] {
+  return getTransactions().filter(t => t.type === 'expense' && (t.incomeSourceId === centerId || (centerId === 'src_4geeks' && t.category === 'إيجار قاعة')));
 }
 
 export function addIncome(amount: number, walletId: string, date: string, incomeSourceId?: string, description?: string): Transaction {

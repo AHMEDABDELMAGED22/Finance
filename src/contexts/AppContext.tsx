@@ -23,7 +23,7 @@ interface AppContextType {
   addLesson: (lesson: Omit<Lesson, 'id' | 'createdAt' | 'updatedAt'>) => void;
   updateLesson: (id: string, updates: Partial<Lesson>) => void;
   deleteLesson: (id: string) => void;
-  addExpense: (amount: number, category: string, walletId: string, date: string, description?: string) => void;
+  addExpense: (amount: number, category: string, walletId: string, date: string, description?: string, incomeSourceId?: string) => void;
   addIncome: (amount: number, walletId: string, date: string, incomeSourceId?: string, description?: string) => void;
   addTransfer: (amount: number, fromWalletId: string, toWalletId: string, date: string, description?: string) => void;
   updateTransaction: (id: string, updates: Partial<Transaction>) => void;
@@ -105,7 +105,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     addLesson: (lesson) => { db.addLesson(lesson); refreshData(); },
     updateLesson: (id, updates) => { db.updateLesson(id, updates); refreshData(); },
     deleteLesson: (id) => { db.deleteLesson(id); refreshData(); },
-    addExpense: (amount, category, walletId, date, desc) => { db.addExpense(amount, category, walletId, date, desc); refreshData(); },
+    addExpense: (amount, category, walletId, date, desc, srcId) => { db.addExpense(amount, category, walletId, date, desc, srcId); refreshData(); },
     addIncome: (amount, walletId, date, srcId, desc) => { db.addIncome(amount, walletId, date, srcId, desc); refreshData(); },
     addTransfer: (amount, from, to, date, desc) => { db.addTransfer(amount, from, to, date, desc); refreshData(); },
     updateTransaction: (id, updates) => { db.updateTransaction(id, updates); refreshData(); },
