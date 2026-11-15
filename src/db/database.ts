@@ -3,7 +3,7 @@ import {
   Wallet, IncomeSource, Student, Lesson, Transaction,
   ExpenseCategory, Obligation, AppSettings,
   WalletType, TransactionType,
-  CenterStudent, StudentSession, StudentPayment, CenterSettlement
+  CenterStudent, StudentSession, StudentPayment, CenterSettlement, CenterGroupSession
 } from './types';
 
 const STORAGE_KEYS = {
@@ -384,6 +384,7 @@ function getDefaultExpenseCategories(): ExpenseCategory[] {
     { id: 'cat_shopping', name: 'Personal Shopping', nameAr: 'مشتريات شخصية', icon: '🛍️', isDefault: true, createdAt: new Date().toISOString() },
     { id: 'cat_work', name: 'Teaching / Work', nameAr: 'تدريس / شغل', icon: '💼', isDefault: true, createdAt: new Date().toISOString() },
     { id: 'cat_rental', name: 'Room Rental', nameAr: 'إيجار قاعة', icon: '🏠', isDefault: true, createdAt: new Date().toISOString() },
+    { id: 'cat_center_share', name: 'Center Share', nameAr: 'نصيب السنتر', icon: '🏫', isDefault: true, createdAt: new Date().toISOString() },
     { id: 'cat_other', name: 'Other', nameAr: 'أخرى', icon: '📦', isDefault: true, createdAt: new Date().toISOString() },
   ];
 }
@@ -487,8 +488,24 @@ export function getTotalReserved(): number {
     .reduce((sum, o) => sum + o.reservedAmount, 0);
 }
 
+export function getOwedToCenters(): number {
+  if (typeof window === 'undefined') return 0;
+  const payments = getStore<StudentPayment>(CENTER_KEYS.payments);
+  // Total center shares collected by tutor directly
+  const totalCenterShareCollected = payments
+    .filter(p => p.receivedBy === 'me' && p.centerShare && p.centerShare > 0)
+    .reduce((sum, p) => sum + (p.centerShare || 0), 0);
+
+  // Minus any expenses paid to center
+  const centerPayouts = getTransactions()
+    .filter(t => t.type === 'expense' && (t.category === 'نصيب السنتر' || t.description?.includes('نصيب السنتر')))
+    .reduce((sum, t) => sum + t.amount, 0);
+
+  return Math.max(0, totalCenterShareCollected - centerPayouts);
+}
+
 export function getAvailableBalance(): number {
-  return getTotalBalance() - getTotalReserved();
+  return getTotalBalance() - getTotalReserved() - getOwedToCenters();
 }
 
 export function getMonthlyIncome(year?: number, month?: number): number {
@@ -548,6 +565,7 @@ const CENTER_KEYS = {
   sessions: 'mmm_student_sessions',
   payments: 'mmm_student_payments',
   settlements: 'mmm_center_settlements',
+  groupSessions: 'mmm_center_group_sessions',
 } as const;
 
 export function getCenterStudents(centerId?: string): CenterStudent[] {
@@ -706,6 +724,31 @@ export function deleteCenterSettlement(id: string): void {
   setStore(CENTER_KEYS.settlements, settlements.filter(x => x.id !== id));
 }
 
+// ==================== Center Group Sessions (4GEEKS & classes) ====================
+
+export function getCenterGroupSessions(centerId?: string): CenterGroupSession[] {
+  const all = getStore<CenterGroupSession>(CENTER_KEYS.groupSessions);
+  const filtered = centerId ? all.filter(s => s.centerId === centerId) : all;
+  return filtered.sort((a, b) => b.sessionNumber - a.sessionNumber || new Date(b.date).getTime() - new Date(a.date).getTime());
+}
+
+export function addCenterGroupSession(session: Omit<CenterGroupSession, 'id' | 'createdAt'>): CenterGroupSession {
+  const sessions = getStore<CenterGroupSession>(CENTER_KEYS.groupSessions);
+  const newSession: CenterGroupSession = {
+    ...session,
+    id: generateId(),
+    createdAt: new Date().toISOString(),
+  };
+  sessions.push(newSession);
+  setStore(CENTER_KEYS.groupSessions, sessions);
+  return newSession;
+}
+
+export function deleteCenterGroupSession(id: string): void {
+  const sessions = getStore<CenterGroupSession>(CENTER_KEYS.groupSessions);
+  setStore(CENTER_KEYS.groupSessions, sessions.filter(s => s.id !== id));
+}
+
 // Reconcile any past payments or settlements created before this update
 export function reconcilePaymentsAndSettlements(): void {
   if (typeof window === 'undefined') return;
@@ -716,13 +759,14 @@ export function reconcilePaymentsAndSettlements(): void {
 
   payments.forEach(p => {
     if (p.receivedBy === 'me' && p.walletId && p.amount > 0) {
-      const amountToWallet = p.myShare != null ? p.myShare : p.amount;
+      const amountToWallet = p.amount;
       const hasTxn = txns.some(t => t.paymentId === p.id || (p.transactionId && t.id === p.transactionId));
       if (!hasTxn) {
         const student = getCenterStudents().find(s => s.id === p.studentId);
         const center = getIncomeSources().find(s => s.id === p.centerId);
         const studentName = student?.name || 'طالب';
         const centerName = center?.nameAr || '';
+        const centerShareNote = p.centerShare && p.centerShare > 0 ? ` (نصيب السنتر منه: ${p.centerShare} ج.م)` : '';
         const newTxn: Transaction = {
           id: generateId(),
           type: 'income',
@@ -731,7 +775,7 @@ export function reconcilePaymentsAndSettlements(): void {
           incomeSourceId: p.centerId,
           paymentId: p.id,
           date: p.date,
-          description: `تحصيل: ${studentName}${centerName ? ` (${centerName})` : ''}`,
+          description: `تحصيل: ${studentName}${centerName ? ` (${centerName})` : ''}${centerShareNote}`,
           createdAt: p.createdAt || new Date().toISOString(),
         };
         txns.push(newTxn);
@@ -790,6 +834,7 @@ export function exportAllData(): string {
     studentSessions: getStudentSessions(),
     studentPayments: getStudentPayments(),
     centerSettlements: getCenterSettlements(),
+    centerGroupSessions: getCenterGroupSessions(),
   };
   return JSON.stringify(data, null, 2);
 }
@@ -810,6 +855,7 @@ export function importAllData(jsonString: string): boolean {
     if (data.studentSessions) setStore('mmm_student_sessions', data.studentSessions);
     if (data.studentPayments) setStore('mmm_student_payments', data.studentPayments);
     if (data.centerSettlements) setStore('mmm_center_settlements', data.centerSettlements);
+    if (data.centerGroupSessions) setStore('mmm_center_group_sessions', data.centerGroupSessions);
     return true;
   } catch (e) {
     console.error('Import failed:', e);

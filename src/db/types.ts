@@ -162,3 +162,15 @@ export interface CenterSettlement {
   notes?: string;
   createdAt: string;
 }
+
+export interface CenterGroupSession {
+  id: string;
+  centerId: string;
+  sessionNumber: number;
+  date: string;
+  topic?: string;
+  attendeeStudentIds: string[];
+  roomRentalAmount?: number;
+  notes?: string;
+  createdAt: string;
+}

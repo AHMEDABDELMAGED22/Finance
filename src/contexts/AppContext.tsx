@@ -14,6 +14,7 @@ interface AppContextType {
   settings: AppSettings;
   totalBalance: number;
   totalReserved: number;
+  totalOwedToCenters: number;
   availableBalance: number;
   monthlyIncome: number;
   monthlyExpenses: number;
@@ -50,12 +51,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [obligations, setObligations] = useState<Obligation[]>([]);
   const [settings, setSettings] = useState<AppSettings>({ id: 'settings', darkMode: false, language: 'ar', currency: 'EGP' });
+  const [totalOwedToCenters, setTotalOwedToCenters] = useState(0);
   const [activeModal, setActiveModal] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const [currentYear, setCurrentYear] = useState(2026);
   const [currentMonth, setCurrentMonth] = useState(0);
 
   const refreshData = useCallback(() => {
+    db.reconcilePaymentsAndSettlements();
     setWallets(db.getWallets());
     setIncomeSources(db.getIncomeSources());
     setLessons(db.getLessons());
@@ -63,6 +66,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setExpenseCategories(db.getExpenseCategories());
     setObligations(db.getObligations());
     setSettings(db.getSettings());
+    setTotalOwedToCenters(db.getOwedToCenters());
     const n = new Date();
     setCurrentYear(n.getFullYear());
     setCurrentMonth(n.getMonth());
@@ -87,7 +91,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const totalBalance = wallets.reduce((sum, w) => sum + w.balance, 0);
   const totalReserved = obligations.filter(o => o.status === 'active').reduce((sum, o) => sum + o.reservedAmount, 0);
-  const availableBalance = totalBalance - totalReserved;
+  const availableBalance = totalBalance - totalReserved - totalOwedToCenters;
 
   const monthlyIncome = useMemo(() => transactions
     .filter(t => {
@@ -111,7 +115,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const value: AppContextType = {
     wallets, incomeSources, lessons, transactions, expenseCategories, obligations, settings,
-    totalBalance, totalReserved, availableBalance, monthlyIncome, monthlyExpenses, outstandingPayments,
+    totalBalance, totalReserved, totalOwedToCenters, availableBalance, monthlyIncome, monthlyExpenses, outstandingPayments,
     refreshData,
     updateWalletBalance: (walletId, balance) => { db.updateWalletBalance(walletId, balance); refreshData(); },
     addLesson: (lesson) => { db.addLesson(lesson); refreshData(); },

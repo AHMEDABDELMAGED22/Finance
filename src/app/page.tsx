@@ -1,17 +1,37 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useApp } from '@/contexts/AppContext';
 import { formatCurrency, formatDate, getToday, getDaysUntil, getWalletIcon } from '@/lib/utils';
 import Modal from '@/components/Modal';
+import EditTransactionModal from '@/components/EditTransactionModal';
 
 export default function Dashboard() {
   const app = useApp();
   const [activeModal, setActiveModal] = useState<string | null>(null);
+  const [editTxnId, setEditTxnId] = useState<string | null>(null);
+  const [txnFilter, setTxnFilter] = useState<'all' | 'income' | 'expense'>('all');
 
   useEffect(() => {
     app.refreshData();
   }, []);
+
+  // Sorted transactions: newest date first, then newest createdAt first
+  const sortedTransactions = useMemo(() => {
+    return [...app.transactions].sort((a, b) => {
+      const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+      if (dateDiff !== 0) return dateDiff;
+      const bCreated = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      const aCreated = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      return bCreated - aCreated;
+    });
+  }, [app.transactions]);
+
+  const filteredTransactions = useMemo(() => {
+    if (txnFilter === 'income') return sortedTransactions.filter(t => t.type === 'income');
+    if (txnFilter === 'expense') return sortedTransactions.filter(t => t.type === 'expense');
+    return sortedTransactions;
+  }, [sortedTransactions, txnFilter]);
 
   return (
     <div className="px-4 pt-6 pb-24 space-y-4">
@@ -25,14 +45,38 @@ export default function Dashboard() {
       </div>
 
       {/* Main Balance Card */}
-      <div className="bg-gradient-to-bl from-emerald-600 to-emerald-700 rounded-2xl p-5 text-white shadow-lg">
-        <p className="text-emerald-100 text-sm mb-1">إجمالي الرصيد</p>
-        <p className="text-3xl font-bold mb-3">{formatCurrency(app.totalBalance)}</p>
-        {app.totalReserved > 0 && (
-          <div className="bg-white/15 rounded-xl p-3 mt-2">
+      <div className="bg-gradient-to-bl from-emerald-600 to-emerald-700 rounded-2xl p-5 text-white shadow-lg space-y-3">
+        <div>
+          <p className="text-emerald-100 text-xs mb-1">إجمالي الرصيد الفعلي (في كل المحافظ)</p>
+          <p className="text-3xl font-bold tracking-tight">{formatCurrency(app.totalBalance)}</p>
+        </div>
+
+        {/* Center Owed Share (if any) */}
+        {app.totalOwedToCenters > 0 && (
+          <div className="bg-amber-500/25 border border-amber-300/40 rounded-xl p-3 text-white">
             <div className="flex justify-between items-center text-sm">
-              <span className="text-emerald-100">المتاح للإنفاق</span>
-              <span className="font-bold text-lg">{formatCurrency(app.availableBalance)}</span>
+              <span className="flex items-center gap-1.5 text-amber-100 font-bold">
+                <span>🏫</span> مستحق للسناتر (في المحافظ)
+              </span>
+              <span className="font-extrabold text-amber-200 text-base">-{formatCurrency(app.totalOwedToCenters)}</span>
+            </div>
+            <p className="text-[11px] text-amber-100/90 mt-1">
+              مبالغ محصلة في إنستاباي/المحافظ وتخص نصيب السناتر لحين تسليمها
+            </p>
+          </div>
+        )}
+
+        {/* Reserved for obligations or Net Available */}
+        {(app.totalReserved > 0 || app.totalOwedToCenters > 0) && (
+          <div className="bg-white/15 rounded-xl p-3 space-y-1.5">
+            <div className="flex justify-between items-center text-sm">
+              <span className="text-emerald-100 font-medium">المتاح الصافي للإنفاق الشخصي</span>
+              <span className="font-extrabold text-xl text-white">{formatCurrency(app.availableBalance)}</span>
+            </div>
+            <div className="text-[11px] text-emerald-100/80 flex flex-wrap gap-2 pt-1 border-t border-white/10">
+              <span>تم استبعاد:</span>
+              {app.totalOwedToCenters > 0 && <span>• نصيب السناتر ({formatCurrency(app.totalOwedToCenters)})</span>}
+              {app.totalReserved > 0 && <span>• الالتزامات المحجوزة ({formatCurrency(app.totalReserved)})</span>}
             </div>
           </div>
         )}
@@ -43,7 +87,7 @@ export default function Dashboard() {
         {app.wallets.map(w => (
           <div key={w.id} className="bg-white rounded-xl p-3 text-center shadow-sm border border-gray-100">
             <span className="text-xl">{getWalletIcon(w.type)}</span>
-            <p className="text-[11px] text-gray-500 mt-1">{w.name}</p>
+            <p className="text-[11px] text-gray-500 mt-1 truncate">{w.name}</p>
             <p className="text-sm font-bold text-gray-800 mt-0.5">{formatCurrency(w.balance)}</p>
           </div>
         ))}
@@ -67,18 +111,24 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Outstanding & Reserved */}
-      <div className="grid grid-cols-2 gap-3">
+      {/* Outstanding & Reserved & Center Owed */}
+      <div className={`grid ${app.totalOwedToCenters > 0 ? 'grid-cols-3' : 'grid-cols-2'} gap-2`}>
         {app.outstandingPayments > 0 && (
-          <div className="bg-amber-50 rounded-xl p-4 border border-amber-100">
-            <p className="text-xs text-amber-700 mb-1">💸 مستحقات لم تُستلم</p>
-            <p className="text-lg font-bold text-amber-700">{formatCurrency(app.outstandingPayments)}</p>
+          <div className="bg-amber-50 rounded-xl p-3 border border-amber-200">
+            <p className="text-[11px] text-amber-800 font-medium mb-1 truncate">💸 مستحقات لم تُستلم</p>
+            <p className="text-base font-bold text-amber-700">{formatCurrency(app.outstandingPayments)}</p>
+          </div>
+        )}
+        {app.totalOwedToCenters > 0 && (
+          <div className="bg-orange-50 rounded-xl p-3 border border-orange-200">
+            <p className="text-[11px] text-orange-800 font-medium mb-1 truncate">🏫 مستحق للسناتر</p>
+            <p className="text-base font-bold text-orange-700">{formatCurrency(app.totalOwedToCenters)}</p>
           </div>
         )}
         {app.totalReserved > 0 && (
-          <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
-            <p className="text-xs text-blue-700 mb-1">🔒 محجوز للالتزامات</p>
-            <p className="text-lg font-bold text-blue-700">{formatCurrency(app.totalReserved)}</p>
+          <div className="bg-blue-50 rounded-xl p-3 border border-blue-200">
+            <p className="text-[11px] text-blue-800 font-medium mb-1 truncate">🔒 محجوز للالتزامات</p>
+            <p className="text-base font-bold text-blue-700">{formatCurrency(app.totalReserved)}</p>
           </div>
         )}
       </div>
@@ -134,37 +184,107 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Recent Transactions */}
-      {app.transactions.length > 0 && (
-        <div>
-          <h2 className="text-base font-bold text-gray-800 mb-2">آخر المعاملات</h2>
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 divide-y divide-gray-50">
-            {app.transactions
-              .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-              .slice(0, 5)
-              .map(txn => (
-                <div key={txn.id} className="flex items-center justify-between p-3">
-                  <div className="flex items-center gap-3">
-                    <span className="text-lg">{txn.type === 'income' ? '⬇️' : txn.type === 'expense' ? '⬆️' : '🔄'}</span>
-                    <div>
-                      <p className="text-sm font-medium text-gray-800">{txn.description}</p>
-                      <p className="text-xs text-gray-400">{formatDate(txn.date)}</p>
-                    </div>
-                  </div>
-                  <span className={`text-sm font-bold ${txn.type === 'income' ? 'text-green-600' : txn.type === 'expense' ? 'text-red-600' : 'text-blue-600'}`}>
-                    {txn.type === 'expense' ? '-' : txn.type === 'income' ? '+' : ''}{formatCurrency(txn.amount)}
-                  </span>
-                </div>
-              ))}
+      {/* Recent Transactions (Both Income & Expense, Newest First, Filterable) */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-base font-bold text-gray-800">آخر المعاملات</h2>
+          {/* Filter Pills */}
+          <div className="flex gap-1 bg-gray-100 p-0.5 rounded-lg text-xs">
+            <button
+              onClick={() => setTxnFilter('all')}
+              className={`px-2.5 py-1 rounded-md font-medium transition-all ${
+                txnFilter === 'all' ? 'bg-white text-gray-800 shadow-sm font-bold' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              الكل ({sortedTransactions.length})
+            </button>
+            <button
+              onClick={() => setTxnFilter('income')}
+              className={`px-2.5 py-1 rounded-md font-medium transition-all ${
+                txnFilter === 'income' ? 'bg-green-600 text-white shadow-sm font-bold' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              إيداع ⬇️
+            </button>
+            <button
+              onClick={() => setTxnFilter('expense')}
+              className={`px-2.5 py-1 rounded-md font-medium transition-all ${
+                txnFilter === 'expense' ? 'bg-red-600 text-white shadow-sm font-bold' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              سحب ⬆️
+            </button>
           </div>
         </div>
-      )}
+
+        {filteredTransactions.length === 0 ? (
+          <div className="bg-white rounded-xl p-6 text-center text-gray-400 border border-gray-100">
+            <p className="text-2xl mb-1">💸</p>
+            <p className="text-xs">لا توجد معاملات مسجلة</p>
+          </div>
+        ) : (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 divide-y divide-gray-50">
+            {filteredTransactions.slice(0, 10).map(txn => {
+              const wallet = app.wallets.find(w => w.id === txn.walletId);
+              const targetWallet = txn.targetWalletId ? app.wallets.find(w => w.id === txn.targetWalletId) : null;
+              const isIncome = txn.type === 'income';
+              const isExpense = txn.type === 'expense';
+              const isTransfer = txn.type === 'transfer';
+
+              return (
+                <div
+                  key={txn.id}
+                  onClick={() => setEditTxnId(txn.id)}
+                  className="flex items-center justify-between p-3.5 hover:bg-gray-50/80 cursor-pointer transition-colors active:bg-gray-100"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-xl">
+                      {isIncome ? '⬇️' : isExpense ? '⬆️' : '🔄'}
+                    </span>
+                    <div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="text-sm font-bold text-gray-800 leading-snug">{txn.description || (isIncome ? 'دخل' : isExpense ? 'مصروف' : 'تحويل')}</p>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                          isIncome ? 'bg-green-100 text-green-700' : isExpense ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
+                        }`}>
+                          {isIncome ? 'إيداع' : isExpense ? 'سحب' : 'تحويل'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
+                        <span>{formatDate(txn.date)}</span>
+                        <span>•</span>
+                        <span className="flex items-center gap-0.5 text-gray-500 font-medium">
+                          {wallet && <span>{getWalletIcon(wallet.type)} {wallet.name}</span>}
+                          {isTransfer && targetWallet && <span> ➔ {getWalletIcon(targetWallet.type)} {targetWallet.name}</span>}
+                        </span>
+                        {txn.category && <span className="bg-gray-100 text-gray-600 px-1.5 py-0.2 rounded text-[10px]">{txn.category}</span>}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-left flex items-center gap-2">
+                    <div>
+                      <span className={`text-sm font-extrabold block ${
+                        isIncome ? 'text-green-600' : isExpense ? 'text-red-600' : 'text-blue-600'
+                      }`}>
+                        {isExpense ? '-' : isIncome ? '+' : ''}{formatCurrency(txn.amount)}
+                      </span>
+                    </div>
+                    <span className="text-gray-300 text-xs">✏️</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Income Modal */}
       <IncomeModal isOpen={activeModal === 'income'} onClose={() => setActiveModal(null)} />
       <ExpenseModal isOpen={activeModal === 'expense'} onClose={() => setActiveModal(null)} />
       <LessonModal isOpen={activeModal === 'lesson'} onClose={() => setActiveModal(null)} />
       <TransferModal isOpen={activeModal === 'transfer'} onClose={() => setActiveModal(null)} />
+      {editTxnId && <EditTransactionModal txnId={editTxnId} onClose={() => { setEditTxnId(null); app.refreshData(); }} />}
     </div>
   );
 }

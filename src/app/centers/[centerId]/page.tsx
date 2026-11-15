@@ -6,9 +6,9 @@ import * as db from '@/db/database';
 import { formatCurrency, formatDate, getToday, getWalletIcon } from '@/lib/utils';
 import Modal from '@/components/Modal';
 import { useApp } from '@/contexts/AppContext';
-import { IncomeSource, CenterStudent, StudentSession, StudentPayment, CenterSettlement, Wallet, Transaction } from '@/db/types';
+import { IncomeSource, CenterStudent, StudentSession, StudentPayment, CenterSettlement, CenterGroupSession, Wallet, Transaction } from '@/db/types';
 
-type Tab = 'students' | 'reports' | 'settlements' | 'rentals';
+type Tab = 'students' | 'sessions' | 'reports' | 'settlements' | 'rentals';
 type PaymentFilter = 'all' | 'paid' | 'partial' | 'unpaid' | 'unknown';
 
 const FAROUK_GROUPS = [
@@ -28,6 +28,7 @@ export default function CenterDetailPage() {
   const [sessions, setSessions] = useState<StudentSession[]>([]);
   const [payments, setPayments] = useState<StudentPayment[]>([]);
   const [settlements, setSettlements] = useState<CenterSettlement[]>([]);
+  const [groupSessions, setGroupSessions] = useState<CenterGroupSession[]>([]);
   const [rentals, setRentals] = useState<Transaction[]>([]);
   const [wallets, setWallets] = useState<Wallet[]>([]);
   const [mounted, setMounted] = useState(false);
@@ -43,6 +44,7 @@ export default function CenterDetailPage() {
   const [sessionStudentId, setSessionStudentId] = useState<string | null>(null);
   const [showSettlement, setShowSettlement] = useState(false);
   const [showPayRental, setShowPayRental] = useState(false);
+  const [showAddGroupSession, setShowAddGroupSession] = useState(false);
 
   // Center type helpers
   const isFarouk = centerId === 'src_farouk';
@@ -55,6 +57,7 @@ export default function CenterDetailPage() {
     setSessions(db.getStudentSessions(centerId));
     setPayments(db.getStudentPayments(centerId));
     setSettlements(db.getCenterSettlements(centerId));
+    setGroupSessions(db.getCenterGroupSessions(centerId));
     setWallets(db.getWallets());
     if (centerId === 'src_4geeks') {
       setRentals(db.getCenterExpenses('src_4geeks'));
@@ -81,22 +84,60 @@ export default function CenterDetailPage() {
     students.forEach(st => {
       const stSessions = sessions.filter(s => s.studentId === st.id && s.status === 'completed');
       const stPayments = payments.filter(p => p.studentId === st.id);
-      const earned = stSessions.reduce((s, ses) => s + ses.amountEarned, 0);
+      const earnedFromSessions = stSessions.reduce((s, ses) => s + ses.amountEarned, 0);
+      const earned = earnedFromSessions > 0 ? earnedFromSessions : (st.agreedAmount || 0);
       const paidTotal = stPayments.reduce((s, p) => s + p.amount, 0);
       const paidToMe = stPayments.filter(p => p.receivedBy === 'me').reduce((s, p) => s + p.amount, 0);
       const paidToCenter = stPayments.filter(p => p.receivedBy === 'center').reduce((s, p) => s + p.amount, 0);
-      const remaining = earned - paidTotal;
+      const remaining = Math.max(0, earned - paidTotal);
 
-      let status: PaymentFilter = 'unknown';
-      if (isCenterPays && stPayments.length === 0) status = 'unknown';
-      else if (remaining <= 0 && earned > 0) status = 'paid';
-      else if (paidTotal > 0 && remaining > 0) status = 'partial';
-      else if (paidTotal === 0 && earned > 0) status = 'unpaid';
+      let status: PaymentFilter = 'unpaid';
+      if (isCenterPays && stPayments.length === 0 && stSessions.length === 0) {
+        status = 'unknown';
+      } else if (paidTotal > 0) {
+        if (earned > 0) {
+          if (paidTotal >= earned) {
+            status = 'paid';
+          } else {
+            status = 'partial';
+          }
+        } else {
+          // If student has made payments but earned is 0, they have paid!
+          status = 'paid';
+        }
+      } else {
+        // paidTotal === 0
+        if (isCenterPays) {
+          status = 'unknown';
+        } else {
+          status = 'unpaid';
+        }
+      }
 
       stats[st.id] = { totalEarned: earned, totalPaid: paidTotal, remaining, paidToMe, paidToCenter, sessionsCount: stSessions.length, status };
     });
     return stats;
   }, [students, sessions, payments, isCenterPays]);
+
+  // Counts of students by payment status for the filter pills
+  const statusCounts = useMemo(() => {
+    let active = students.filter(s => s.isActive);
+    if (isFarouk && selectedGroup !== 'all') {
+      if (selectedGroup === 'أخرى') {
+        active = active.filter(s => !(FAROUK_GROUPS as readonly string[]).includes(s.group || ''));
+      } else {
+        active = active.filter(s => s.group === selectedGroup);
+      }
+    }
+    const counts = { all: active.length, paid: 0, partial: 0, unpaid: 0, unknown: 0 };
+    active.forEach(st => {
+      const stStat = studentStats[st.id];
+      if (stStat) {
+        counts[stStat.status] = (counts[stStat.status] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [students, isFarouk, selectedGroup, studentStats]);
 
   // Center-level summaries
   const summary = useMemo(() => {
@@ -246,21 +287,55 @@ export default function CenterDetailPage() {
       )}
 
       {is4Geeks && (
-        <div className="bg-purple-50 rounded-2xl p-3 border border-purple-200 flex items-center justify-between shadow-sm">
-          <div>
-            <p className="text-xs text-purple-900 font-bold">إيجار قاعة 4GEEKS (40 ج.م/حصة)</p>
-            <p className="text-[11px] text-purple-700">
-              مخصوم: <span className="font-bold text-green-700">{formatCurrency(summary.roomRentalPaid)}</span>
-              {' • '}
-              مستحق للحصص: <span className="font-bold">{formatCurrency(summary.roomRentalDue)}</span>
-            </p>
+        <div className="bg-gradient-to-r from-purple-900 to-indigo-900 rounded-2xl p-4 text-white shadow-md space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[11px] text-purple-200">متابعة حصص 4GEEKS</p>
+              <h3 className="text-lg font-black text-white">
+                {groupSessions.length > 0 ? `احنا في الحصة رقم #${groupSessions[0].sessionNumber}` : 'لم تبدأ الحصص بعد'}
+              </h3>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowAddGroupSession(true)}
+                className="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-2 rounded-xl text-xs font-bold active:scale-95 shadow transition-all flex items-center gap-1"
+              >
+                <span>➕</span> تسجيل حصة
+              </button>
+              <button
+                onClick={() => setShowPayRental(true)}
+                className="bg-purple-800/80 hover:bg-purple-700 text-purple-100 px-3 py-2 rounded-xl text-xs font-bold active:scale-95 border border-purple-500/40"
+              >
+                🏠 خصم إيجار
+              </button>
+            </div>
           </div>
-          <button
-            onClick={() => setShowPayRental(true)}
-            className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-xl text-xs font-bold active:scale-95 shadow"
-          >
-            🏠 خصم إيجار قاعة
-          </button>
+
+          <div className="grid grid-cols-3 gap-2 text-center pt-2 border-t border-purple-700/60">
+            <div className="bg-white/10 rounded-xl p-2">
+              <p className="text-[10px] text-purple-200">أخذنا كام حصة؟</p>
+              <p className="text-base font-extrabold text-white">{groupSessions.length} حصص</p>
+            </div>
+            <div className="bg-white/10 rounded-xl p-2">
+              <p className="text-[10px] text-purple-200">الحصة القادمة</p>
+              <p className="text-base font-extrabold text-amber-300">
+                رقم #{groupSessions.length > 0 ? (Math.max(...groupSessions.map(s => s.sessionNumber)) + 1) : 1}
+              </p>
+            </div>
+            <div className="bg-white/10 rounded-xl p-2">
+              <p className="text-[10px] text-purple-200">آخر حصة مسجلة</p>
+              <p className="text-xs font-bold text-white truncate mt-1">
+                {groupSessions.length > 0 ? formatDate(groupSessions[0].date) : 'لا يوجد'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex justify-between items-center text-[11px] text-purple-200 bg-white/5 px-3 py-1.5 rounded-xl border border-white/10">
+            <span>إيجار القاعة (40 ج/حصة): مخصوم <strong className="text-emerald-300">{formatCurrency(summary.roomRentalPaid)}</strong></span>
+            {summary.roomRentalRemaining > 0 && (
+              <span className="text-amber-300 font-bold">متبقي: {formatCurrency(summary.roomRentalRemaining)}</span>
+            )}
+          </div>
         </div>
       )}
 
@@ -311,9 +386,10 @@ export default function CenterDetailPage() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-1">
         {[
-          { v: 'students' as Tab, l: '👥 الطلبة' },
+          { v: 'students' as Tab, l: `👥 الطلبة (${students.filter(s => s.isActive).length})` },
+          ...(is4Geeks ? [{ v: 'sessions' as Tab, l: `📅 سجل الحصص (${groupSessions.length})` }] : []),
           ...((isFarouk || isCenterPays) ? [{ v: 'settlements' as Tab, l: '💰 تسويات السنتر' }] : []),
           ...(is4Geeks ? [{ v: 'rentals' as Tab, l: '🏠 إيجار القاعات' }] : []),
           { v: 'reports' as Tab, l: '📊 التقارير' },
@@ -321,7 +397,7 @@ export default function CenterDetailPage() {
           <button
             key={t.v}
             onClick={() => setTab(t.v)}
-            className={`px-4 py-2 rounded-full text-xs font-bold transition-colors ${
+            className={`px-3.5 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${
               tab === t.v ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white text-gray-600 border border-gray-200'
             }`}
           >
@@ -333,20 +409,20 @@ export default function CenterDetailPage() {
       {/* Students Tab */}
       {tab === 'students' && (
         <div className="space-y-3">
-          {/* Payment Status Filter */}
+          {/* Payment Status Filter with Live Counts */}
           <div className="flex gap-1.5 overflow-x-auto hide-scrollbar pb-1">
             {[
-              { v: 'all' as PaymentFilter, l: 'كل الحالات' },
-              { v: 'unpaid' as PaymentFilter, l: 'لم يدفع 🔴' },
-              { v: 'partial' as PaymentFilter, l: 'دفع جزئي 🟡' },
-              { v: 'paid' as PaymentFilter, l: 'مدفوع بالكامل 🟢' },
-              ...(isCenterPays ? [{ v: 'unknown' as PaymentFilter, l: 'غير معروف ⚪' }] : []),
+              { v: 'all' as PaymentFilter, l: `الكل (${statusCounts.all})` },
+              { v: 'paid' as PaymentFilter, l: `مدفوع بالكامل 🟢 (${statusCounts.paid})` },
+              { v: 'partial' as PaymentFilter, l: `دفع جزئي 🟡 (${statusCounts.partial})` },
+              { v: 'unpaid' as PaymentFilter, l: `لم يدفع 🔴 (${statusCounts.unpaid})` },
+              ...(isCenterPays ? [{ v: 'unknown' as PaymentFilter, l: `غير معروف ⚪ (${statusCounts.unknown})` }] : []),
             ].map(f => (
               <button
                 key={f.v}
                 onClick={() => setPaymentFilter(f.v)}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
-                  paymentFilter === f.v ? 'bg-gray-800 text-white' : 'bg-white text-gray-600 border border-gray-200'
+                className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all ${
+                  paymentFilter === f.v ? 'bg-gray-800 text-white shadow-sm' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
                 }`}
               >
                 {f.l}
@@ -369,10 +445,10 @@ export default function CenterDetailPage() {
                 const stat = studentStats[st.id];
                 if (!stat) return null;
                 const isExpanded = expandedStudent === st.id;
-                const statusBadge = stat.status === 'paid' ? { l: 'مدفوع', c: 'bg-green-100 text-green-700' }
-                  : stat.status === 'partial' ? { l: 'جزئي', c: 'bg-amber-100 text-amber-700' }
-                  : stat.status === 'unpaid' ? { l: 'لم يدفع', c: 'bg-red-100 text-red-700' }
-                  : { l: 'غير معروف', c: 'bg-gray-100 text-gray-500' };
+                const statusBadge = stat.status === 'paid' ? { l: 'مدفوع بالكامل 🟢', c: 'bg-green-100 text-green-700' }
+                  : stat.status === 'partial' ? { l: 'دفع جزئي 🟡', c: 'bg-amber-100 text-amber-700' }
+                  : stat.status === 'unpaid' ? { l: 'لم يدفع 🔴', c: 'bg-red-100 text-red-700' }
+                  : { l: 'غير معروف ⚪', c: 'bg-gray-100 text-gray-500' };
 
                 return (
                   <div key={st.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden transition-all">
@@ -403,12 +479,16 @@ export default function CenterDetailPage() {
                       </div>
 
                       <div className="text-left">
-                        <p className="text-sm font-bold text-gray-800">{formatCurrency(stat.totalEarned)}</p>
+                        <p className="text-sm font-bold text-gray-800">
+                          {stat.totalEarned > 0 ? formatCurrency(stat.totalEarned) : (stat.totalPaid > 0 ? formatCurrency(stat.totalPaid) : '0 ج.م')}
+                        </p>
                         {stat.remaining > 0 ? (
                           <p className="text-xs font-bold text-red-600">باقي: {formatCurrency(stat.remaining)}</p>
-                        ) : stat.totalEarned > 0 ? (
+                        ) : stat.totalPaid > 0 ? (
                           <p className="text-[11px] font-bold text-green-600">مسدد بالكامل</p>
-                        ) : null}
+                        ) : (
+                          <p className="text-[11px] text-gray-400">لا مستحقات</p>
+                        )}
                       </div>
                     </div>
 
@@ -528,6 +608,16 @@ export default function CenterDetailPage() {
         />
       )}
 
+      {/* Group Sessions Tab (4GEEKS & classes) */}
+      {tab === 'sessions' && (
+        <GroupSessionsSection
+          sessions={groupSessions}
+          students={students}
+          onAdd={() => setShowAddGroupSession(true)}
+          onDelete={(id) => { db.deleteCenterGroupSession(id); handleMutation(); }}
+        />
+      )}
+
       {/* Reports Tab */}
       {tab === 'reports' && (
         <ReportsSection
@@ -548,6 +638,16 @@ export default function CenterDetailPage() {
       {sessionStudentId && <SessionModal studentId={sessionStudentId} centerId={centerId} source={source} onClose={() => { setSessionStudentId(null); handleMutation(); }} />}
       {showSettlement && <SettlementModal centerId={centerId} sourceName={source.nameAr} wallets={wallets} onClose={() => { setShowSettlement(false); handleMutation(); }} />}
       {showPayRental && <PayRentalModal source={source} wallets={wallets} onClose={() => { setShowPayRental(false); handleMutation(); }} />}
+      {showAddGroupSession && (
+        <AddGroupSessionModal
+          centerId={centerId}
+          students={students.filter(s => s.isActive)}
+          existingSessions={groupSessions}
+          source={source}
+          wallets={wallets}
+          onClose={() => { setShowAddGroupSession(false); handleMutation(); }}
+        />
+      )}
     </div>
   );
 }
@@ -1346,6 +1446,362 @@ function SettlementModal({ centerId, sourceName, wallets, onClose }: {
         <button onClick={handleSave} disabled={!amount || parseFloat(amount) <= 0}
           className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-4 rounded-xl font-bold disabled:opacity-50 active:scale-[0.98] shadow">
           تأكيد استلام الدفعة
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ============== Group Sessions Section (4GEEKS & classes) ==============
+function GroupSessionsSection({
+  sessions,
+  students,
+  onAdd,
+  onDelete,
+}: {
+  sessions: CenterGroupSession[];
+  students: CenterStudent[];
+  onAdd: () => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      {/* Session Quick Overview Header */}
+      <div className="bg-gradient-to-r from-purple-800 to-indigo-900 rounded-2xl p-4 text-white shadow-sm space-y-2">
+        <div className="flex justify-between items-center">
+          <div>
+            <h3 className="font-extrabold text-base">سجل وجدول حصص 4GEEKS</h3>
+            <p className="text-xs text-purple-200 mt-0.5">
+              {sessions.length > 0 ? `تم إعطاء ${sessions.length} حصص حتى الآن` : 'لا توجد حصص مسجلة بعد'}
+            </p>
+          </div>
+          <button
+            onClick={onAdd}
+            className="bg-emerald-500 hover:bg-emerald-600 text-white px-3.5 py-2 rounded-xl text-xs font-bold active:scale-95 shadow transition-all flex items-center gap-1.5"
+          >
+            <span>➕</span> تسجيل حصة جديدة
+          </button>
+        </div>
+
+        {sessions.length > 0 && (
+          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-purple-700/60 text-center">
+            <div className="bg-white/10 rounded-xl p-2">
+              <p className="text-[10px] text-purple-200">احنا في الحصة الكام؟</p>
+              <p className="text-sm font-bold text-white">الحصة #{sessions[0].sessionNumber}</p>
+            </div>
+            <div className="bg-white/10 rounded-xl p-2">
+              <p className="text-[10px] text-purple-200">الحصة القادمة</p>
+              <p className="text-sm font-bold text-amber-300">
+                الحصة #{Math.max(...sessions.map(s => s.sessionNumber)) + 1}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* List of Sessions */}
+      {sessions.length === 0 ? (
+        <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-gray-200 text-gray-400">
+          <p className="text-4xl mb-2">📅</p>
+          <p className="font-medium text-sm">لم يتم تسجيل أي حصة حتى الآن</p>
+          <button
+            onClick={onAdd}
+            className="mt-3 bg-purple-600 text-white px-4 py-2 rounded-xl text-xs font-bold"
+          >
+            + تسجيل أول حصة
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {sessions.map(ses => {
+            const attendeeStudents = students.filter(s => ses.attendeeStudentIds.includes(s.id));
+            return (
+              <div key={ses.id} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 space-y-2">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="bg-purple-100 text-purple-800 text-xs px-2.5 py-1 rounded-lg font-extrabold">
+                        الحصة رقم #{ses.sessionNumber}
+                      </span>
+                      <span className="text-xs text-gray-500 font-medium">📅 {formatDate(ses.date)}</span>
+                    </div>
+                    {ses.topic && (
+                      <p className="font-bold text-sm text-gray-800 mt-1.5">{ses.topic}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (confirm(`هل أنت متأكد من حذف الحصة رقم #${ses.sessionNumber}؟`)) {
+                        onDelete(ses.id);
+                      }
+                    }}
+                    className="text-gray-300 hover:text-red-500 text-sm p-1 rounded-lg transition-colors"
+                    title="حذف الحصة"
+                  >
+                    🗑️
+                  </button>
+                </div>
+
+                {/* Attendees list */}
+                <div className="pt-1 border-t border-gray-50">
+                  <div className="flex items-center justify-between text-xs text-gray-600 mb-1.5">
+                    <span className="font-medium">الطلبة الحاضرين: <strong>{attendeeStudents.length} طالب</strong></span>
+                    {ses.roomRentalAmount ? (
+                      <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded text-[11px] font-bold">
+                        🏠 مخصوم إيجار القاعة ({ses.roomRentalAmount} ج.م)
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="flex flex-wrap gap-1">
+                    {attendeeStudents.map(st => (
+                      <span
+                        key={st.id}
+                        className="bg-gray-100 text-gray-700 text-[11px] px-2 py-0.5 rounded-full font-medium"
+                      >
+                        ✓ {st.name}
+                      </span>
+                    ))}
+                    {attendeeStudents.length === 0 && (
+                      <span className="text-gray-400 text-xs">لم يتم تسجيل حضور طلبة</span>
+                    )}
+                  </div>
+                </div>
+
+                {ses.notes && (
+                  <p className="text-[11px] text-gray-500 bg-gray-50 p-2 rounded-xl">
+                    📝 {ses.notes}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============== Add Group Session Modal ==============
+function AddGroupSessionModal({
+  centerId,
+  students,
+  existingSessions,
+  source,
+  wallets,
+  onClose,
+}: {
+  centerId: string;
+  students: CenterStudent[];
+  existingSessions: CenterGroupSession[];
+  source: IncomeSource;
+  wallets: Wallet[];
+  onClose: () => void;
+}) {
+  const nextNumber = existingSessions.length > 0 
+    ? Math.max(...existingSessions.map(s => s.sessionNumber)) + 1 
+    : 1;
+
+  const [sessionNumber, setSessionNumber] = useState(String(nextNumber));
+  const [date, setDate] = useState(getToday());
+  const [topic, setTopic] = useState('');
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>(students.map(s => s.id));
+  const [deductRoomRental, setDeductRoomRental] = useState(true);
+  const [rentalWalletId, setRentalWalletId] = useState('wallet_cash');
+  const [notes, setNotes] = useState('');
+
+  const toggleStudent = (id: string) => {
+    setSelectedStudentIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const selectAll = () => setSelectedStudentIds(students.map(s => s.id));
+  const deselectAll = () => setSelectedStudentIds([]);
+
+  const handleSave = () => {
+    const num = parseInt(sessionNumber) || nextNumber;
+    const roomRentalRate = source?.roomRental || 40;
+    const rentalAmount = deductRoomRental ? roomRentalRate : undefined;
+
+    // 1. Add Group Session record
+    db.addCenterGroupSession({
+      centerId,
+      sessionNumber: num,
+      date,
+      topic: topic || undefined,
+      attendeeStudentIds: selectedStudentIds,
+      roomRentalAmount: rentalAmount,
+      notes: notes || undefined,
+    });
+
+    // 2. Add individual StudentSession for each attendee so their lesson ledger updates!
+    selectedStudentIds.forEach(stId => {
+      const student = students.find(s => s.id === stId);
+      const rate = student?.ratePerLesson || 0;
+      db.addStudentSession({
+        studentId: stId,
+        centerId,
+        date,
+        amountEarned: rate,
+        status: 'completed',
+        notes: `حصة جماعية رقم #${num}${topic ? ` (${topic})` : ''}`,
+      });
+    });
+
+    // 3. Deduct room rental as an expense transaction if chosen
+    if (deductRoomRental) {
+      db.addExpense(
+        roomRentalRate,
+        'إيجار قاعة',
+        rentalWalletId,
+        date,
+        `إيجار قاعة 4GEEKS - الحصة رقم #${num}`,
+        'src_4geeks'
+      );
+    }
+
+    onClose();
+  };
+
+  return (
+    <Modal isOpen={true} onClose={onClose} title="📅 تسجيل حصة جديدة في 4GEEKS">
+      <div className="space-y-4">
+        {/* Session Number & Date */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1">رقم الحصة</label>
+            <input
+              type="number"
+              value={sessionNumber}
+              onChange={e => setSessionNumber(e.target.value)}
+              className="w-full p-3 border border-gray-200 rounded-xl text-center font-bold text-lg outline-none focus:ring-2 focus:ring-purple-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1">تاريخ الحصة</label>
+            <input
+              type="date"
+              value={date}
+              onChange={e => setDate(e.target.value)}
+              className="w-full p-3 border border-gray-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-purple-500"
+            />
+          </div>
+        </div>
+
+        {/* Topic / Description */}
+        <div>
+          <label className="block text-xs font-bold text-gray-700 mb-1">موضوع أو عنوان الحصة (اختياري)</label>
+          <input
+            type="text"
+            value={topic}
+            onChange={e => setTopic(e.target.value)}
+            placeholder="مثال: مقدمة البرمجة والمنطق البرمجي"
+            className="w-full p-3 border border-gray-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-purple-500"
+          />
+        </div>
+
+        {/* Attendees Checklist */}
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-bold text-gray-700">
+              الطلبة الحاضرين ({selectedStudentIds.length} من {students.length})
+            </label>
+            <div className="flex gap-2 text-[11px]">
+              <button type="button" onClick={selectAll} className="text-purple-600 font-bold hover:underline">
+                تحديد الكل
+              </button>
+              <span>•</span>
+              <button type="button" onClick={deselectAll} className="text-gray-500 hover:underline">
+                إلغاء الكل
+              </button>
+            </div>
+          </div>
+
+          <div className="max-h-40 overflow-y-auto space-y-1.5 p-2 bg-gray-50 rounded-xl border border-gray-200">
+            {students.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-2">لا يوجد طلبة مسجلين بعد</p>
+            ) : (
+              students.map(st => {
+                const isChecked = selectedStudentIds.includes(st.id);
+                return (
+                  <label
+                    key={st.id}
+                    className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors text-xs ${
+                      isChecked ? 'bg-purple-50 border border-purple-200 text-purple-900 font-medium' : 'bg-white text-gray-600'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleStudent(st.id)}
+                        className="rounded text-purple-600 focus:ring-purple-500 w-4 h-4"
+                      />
+                      <span>{st.name}</span>
+                    </div>
+                    {st.ratePerLesson ? (
+                      <span className="text-[10px] text-gray-400">{formatCurrency(st.ratePerLesson)}</span>
+                    ) : null}
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Room Rental Option */}
+        <div className="bg-purple-50 p-3 rounded-xl border border-purple-200 space-y-2">
+          <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-purple-900">
+            <input
+              type="checkbox"
+              checked={deductRoomRental}
+              onChange={e => setDeductRoomRental(e.target.checked)}
+              className="rounded text-purple-600 focus:ring-purple-500 w-4 h-4"
+            />
+            <span>خصم إيجار القاعة لهذه الحصة ({source?.roomRental || 40} ج.م)</span>
+          </label>
+
+          {deductRoomRental && (
+            <div>
+              <p className="text-[11px] text-purple-700 mb-1">دفع إيجار القاعة من محفظة:</p>
+              <div className="grid grid-cols-3 gap-1.5">
+                {wallets.map(w => (
+                  <button
+                    key={w.id}
+                    type="button"
+                    onClick={() => setRentalWalletId(w.id)}
+                    className={`p-2 rounded-lg text-center text-[11px] font-bold transition-all ${
+                      rentalWalletId === w.id ? 'bg-purple-600 text-white' : 'bg-white text-gray-700 border border-purple-100'
+                    }`}
+                  >
+                    <span>{getWalletIcon(w.type)}</span> {w.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Notes */}
+        <div>
+          <label className="block text-xs font-bold text-gray-700 mb-1">ملاحظات إضافية (اختياري)</label>
+          <input
+            type="text"
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            placeholder="ملاحظات الحصة..."
+            className="w-full p-3 border border-gray-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-purple-500"
+          />
+        </div>
+
+        {/* Submit */}
+        <button
+          type="button"
+          onClick={handleSave}
+          className="w-full bg-purple-700 hover:bg-purple-800 text-white py-4 rounded-xl font-bold active:scale-[0.98] shadow text-sm"
+        >
+          ✓ حفظ الحصة وتسجيل الحضور
         </button>
       </div>
     </Modal>

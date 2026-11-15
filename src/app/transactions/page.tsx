@@ -28,7 +28,13 @@ export default function TransactionsPage() {
         const d = new Date(t.date);
         return d.getFullYear() === curYear && d.getMonth() === curMonth;
       })
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      .sort((a, b) => {
+        const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+        if (dateDiff !== 0) return dateDiff;
+        const bCreated = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        const aCreated = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        return bCreated - aCreated;
+      });
   }, [app.transactions, curYear, curMonth]);
 
   const filtered = filter === 'all' ? monthTransactions : monthTransactions.filter(t => t.type === filter);
