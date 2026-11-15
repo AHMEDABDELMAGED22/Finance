@@ -59,10 +59,17 @@ export default function CenterDetailPage() {
     if (centerId === 'src_4geeks') {
       setRentals(db.getCenterExpenses('src_4geeks'));
     }
-    app.refreshData();
-  }, [centerId, app]);
+  }, [centerId]);
 
-  useEffect(() => { refresh(); setMounted(true); }, [refresh]);
+  const handleMutation = useCallback(() => {
+    refresh();
+    app.refreshData();
+  }, [refresh, app]);
+
+  useEffect(() => {
+    refresh();
+    setMounted(true);
+  }, [refresh]);
 
   // Per-student calculations
   const studentStats = useMemo(() => {
@@ -506,7 +513,7 @@ export default function CenterDetailPage() {
           wallets={wallets}
           summary={summary}
           onAdd={() => setShowSettlement(true)}
-          onDelete={(id) => { db.deleteCenterSettlement(id); refresh(); }}
+          onDelete={(id) => { db.deleteCenterSettlement(id); handleMutation(); }}
         />
       )}
 
@@ -517,7 +524,7 @@ export default function CenterDetailPage() {
           wallets={wallets}
           summary={summary}
           onAdd={() => setShowPayRental(true)}
-          onDelete={(id) => { db.deleteTransaction(id); refresh(); }}
+          onDelete={(id) => { db.deleteTransaction(id); handleMutation(); }}
         />
       )}
 
@@ -535,12 +542,12 @@ export default function CenterDetailPage() {
       )}
 
       {/* Modals */}
-      {showAddStudent && <AddStudentModal centerId={centerId} onClose={() => { setShowAddStudent(false); refresh(); }} isFarouk={isFarouk} />}
-      {editStudentId && <EditStudentModal studentId={editStudentId} onClose={() => { setEditStudentId(null); refresh(); }} isFarouk={isFarouk} />}
-      {payStudentId && <PaymentModal studentId={payStudentId} centerId={centerId} isFarouk={isFarouk} wallets={wallets} onClose={() => { setPayStudentId(null); refresh(); }} />}
-      {sessionStudentId && <SessionModal studentId={sessionStudentId} centerId={centerId} source={source} onClose={() => { setSessionStudentId(null); refresh(); }} />}
-      {showSettlement && <SettlementModal centerId={centerId} sourceName={source.nameAr} wallets={wallets} onClose={() => { setShowSettlement(false); refresh(); }} />}
-      {showPayRental && <PayRentalModal source={source} wallets={wallets} onClose={() => { setShowPayRental(false); refresh(); }} />}
+      {showAddStudent && <AddStudentModal centerId={centerId} onClose={() => { setShowAddStudent(false); handleMutation(); }} isFarouk={isFarouk} />}
+      {editStudentId && <EditStudentModal studentId={editStudentId} onClose={() => { setEditStudentId(null); handleMutation(); }} isFarouk={isFarouk} />}
+      {payStudentId && <PaymentModal studentId={payStudentId} centerId={centerId} isFarouk={isFarouk} wallets={wallets} onClose={() => { setPayStudentId(null); handleMutation(); }} />}
+      {sessionStudentId && <SessionModal studentId={sessionStudentId} centerId={centerId} source={source} onClose={() => { setSessionStudentId(null); handleMutation(); }} />}
+      {showSettlement && <SettlementModal centerId={centerId} sourceName={source.nameAr} wallets={wallets} onClose={() => { setShowSettlement(false); handleMutation(); }} />}
+      {showPayRental && <PayRentalModal source={source} wallets={wallets} onClose={() => { setShowPayRental(false); handleMutation(); }} />}
     </div>
   );
 }
