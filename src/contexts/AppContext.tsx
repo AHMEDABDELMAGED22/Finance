@@ -26,6 +26,7 @@ interface AppContextType {
   addExpense: (amount: number, category: string, walletId: string, date: string, description?: string) => void;
   addIncome: (amount: number, walletId: string, date: string, incomeSourceId?: string, description?: string) => void;
   addTransfer: (amount: number, fromWalletId: string, toWalletId: string, date: string, description?: string) => void;
+  updateTransaction: (id: string, updates: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
   addObligation: (obligation: Omit<Obligation, 'id' | 'createdAt' | 'updatedAt'>) => void;
   updateObligation: (id: string, updates: Partial<Obligation>) => void;
@@ -107,6 +108,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     addExpense: (amount, category, walletId, date, desc) => { db.addExpense(amount, category, walletId, date, desc); refreshData(); },
     addIncome: (amount, walletId, date, srcId, desc) => { db.addIncome(amount, walletId, date, srcId, desc); refreshData(); },
     addTransfer: (amount, from, to, date, desc) => { db.addTransfer(amount, from, to, date, desc); refreshData(); },
+    updateTransaction: (id, updates) => { db.updateTransaction(id, updates); refreshData(); },
     deleteTransaction: (id) => { db.deleteTransaction(id); refreshData(); },
     addObligation: (ob) => { db.addObligation(ob); refreshData(); },
     updateObligation: (id, updates) => { db.updateObligation(id, updates); refreshData(); },

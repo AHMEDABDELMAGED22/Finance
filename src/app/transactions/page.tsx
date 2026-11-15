@@ -12,6 +12,7 @@ export default function TransactionsPage() {
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showFab, setShowFab] = useState(false);
+  const [editTxnId, setEditTxnId] = useState<string | null>(null);
   const [curYear, setCurYear] = useState(2026);
   const [curMonth, setCurMonth] = useState(0);
 
@@ -141,7 +142,7 @@ export default function TransactionsPage() {
                 const wallet = app.wallets.find(w => w.id === txn.walletId);
                 const targetWallet = txn.targetWalletId ? app.wallets.find(w => w.id === txn.targetWalletId) : null;
                 return (
-                  <div key={txn.id} className="flex items-center justify-between p-3 group">
+                  <div key={txn.id} className="flex items-center justify-between p-3 cursor-pointer active:bg-gray-50" onClick={() => setEditTxnId(txn.id)}>
                     <div className="flex items-center gap-3 flex-1">
                       <span className="text-lg">{txn.type === 'income' ? '⬇️' : txn.type === 'expense' ? '⬆️' : '🔄'}</span>
                       <div className="flex-1 min-w-0">
@@ -154,15 +155,9 @@ export default function TransactionsPage() {
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`text-sm font-bold ${txn.type === 'income' ? 'text-green-600' : txn.type === 'expense' ? 'text-red-600' : 'text-blue-600'}`}>
-                        {txn.type === 'expense' ? '-' : txn.type === 'income' ? '+' : ''}{formatCurrency(txn.amount)}
-                      </span>
-                      <button onClick={(e) => { e.stopPropagation(); handleDelete(txn.id); }}
-                        className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs p-1">
-                        🗑️
-                      </button>
-                    </div>
+                    <span className={`text-sm font-bold ${txn.type === 'income' ? 'text-green-600' : txn.type === 'expense' ? 'text-red-600' : 'text-blue-600'}`}>
+                      {txn.type === 'expense' ? '-' : txn.type === 'income' ? '+' : ''}{formatCurrency(txn.amount)}
+                    </span>
                   </div>
                 );
               })}
@@ -199,6 +194,7 @@ export default function TransactionsPage() {
       <IncomeModal isOpen={showIncomeModal} onClose={() => setShowIncomeModal(false)} />
       <ExpenseModal isOpen={showExpenseModal} onClose={() => setShowExpenseModal(false)} />
       <TransferModal isOpen={showTransferModal} onClose={() => setShowTransferModal(false)} />
+      {editTxnId && <EditTransactionModal txnId={editTxnId} onClose={() => { setEditTxnId(null); }} />}
     </div>
   );
 }
@@ -336,6 +332,156 @@ function TransferModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => vo
         <p className="text-xs text-gray-400 text-center">⚠️ التحويل الداخلي لن يُحسب كدخل أو مصروف</p>
         <button onClick={handleSave} disabled={!amount || parseFloat(amount) <= 0 || fromId === toId}
           className="w-full bg-purple-600 text-white py-4 rounded-xl font-bold disabled:opacity-50">تنفيذ التحويل</button>
+      </div>
+    </Modal>
+  );
+}
+
+
+// ============== Edit Transaction Modal ==============
+function EditTransactionModal({ txnId, onClose }: { txnId: string; onClose: () => void }) {
+  const app = useApp();
+  const txn = app.transactions.find(t => t.id === txnId);
+
+  const [amount, setAmount] = useState(txn?.amount?.toString() || '');
+  const [category, setCategory] = useState(txn?.category || '');
+  const [walletId, setWalletId] = useState(txn?.walletId || 'wallet_cash');
+  const [targetWalletId, setTargetWalletId] = useState(txn?.targetWalletId || '');
+  const [date, setDate] = useState(txn?.date || getToday());
+  const [desc, setDesc] = useState(txn?.description || '');
+  const [sourceId, setSourceId] = useState(txn?.incomeSourceId || '');
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  if (!txn) return null;
+
+  const isIncome = txn.type === 'income';
+  const isExpense = txn.type === 'expense';
+  const isTransfer = txn.type === 'transfer';
+
+  const handleSave = () => {
+    const amt = parseFloat(amount);
+    if (!amt || amt <= 0) return;
+
+    const updates: Record<string, unknown> = {
+      amount: amt,
+      date,
+      description: desc || undefined,
+    };
+
+    if (isIncome) {
+      updates.walletId = walletId;
+      updates.incomeSourceId = sourceId || undefined;
+    } else if (isExpense) {
+      updates.walletId = walletId;
+      updates.category = category;
+    } else if (isTransfer) {
+      updates.walletId = walletId;
+      updates.targetWalletId = targetWalletId;
+    }
+
+    app.updateTransaction(txnId, updates);
+    onClose();
+  };
+
+  const handleDelete = () => {
+    if (!confirmDelete) { setConfirmDelete(true); return; }
+    app.deleteTransaction(txnId);
+    onClose();
+  };
+
+  const title = isIncome ? 'تعديل الدخل' : isExpense ? 'تعديل المصروف' : 'تعديل التحويل';
+  const color = isIncome ? 'emerald' : isExpense ? 'red' : 'purple';
+
+  return (
+    <Modal isOpen={true} onClose={onClose} title={`✏️ ${title}`}>
+      <div className="space-y-4">
+        {/* Amount */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">المبلغ (ج.م)</label>
+          <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0"
+            className={`w-full text-2xl font-bold text-center p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-${color}-500 outline-none`} />
+        </div>
+
+        {/* Wallet */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">{isTransfer ? 'من' : 'المحفظة'}</label>
+          <div className="grid grid-cols-3 gap-2">
+            {app.wallets.map(w => (
+              <button key={w.id} onClick={() => setWalletId(w.id)}
+                className={`p-2 rounded-xl text-center text-xs font-medium transition-colors ${walletId === w.id ? `bg-${color}-500 text-white` : 'bg-gray-100 text-gray-600'}`}>
+                <span className="text-sm block">{getWalletIcon(w.type)}</span>{w.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Transfer: target wallet */}
+        {isTransfer && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">إلى</label>
+            <div className="grid grid-cols-3 gap-2">
+              {app.wallets.filter(w => w.id !== walletId).map(w => (
+                <button key={w.id} onClick={() => setTargetWalletId(w.id)}
+                  className={`p-2 rounded-xl text-center text-xs font-medium transition-colors ${targetWalletId === w.id ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                  <span className="text-sm block">{getWalletIcon(w.type)}</span>{w.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Expense: category */}
+        {isExpense && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">التصنيف</label>
+            <div className="grid grid-cols-3 gap-2">
+              {app.expenseCategories.map(cat => (
+                <button key={cat.id} onClick={() => setCategory(cat.nameAr)}
+                  className={`p-2 rounded-xl text-center text-xs font-medium transition-colors ${category === cat.nameAr ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                  <span className="text-lg block">{cat.icon}</span>{cat.nameAr}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Income: source */}
+        {isIncome && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">مصدر الدخل</label>
+            <select value={sourceId} onChange={e => setSourceId(e.target.value)}
+              className="w-full p-3 border border-gray-200 rounded-xl text-sm outline-none">
+              <option value="">— اختياري —</option>
+              {app.incomeSources.filter(s => s.isActive).map(s => <option key={s.id} value={s.id}>{s.nameAr}</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* Date */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">التاريخ</label>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)}
+            className="w-full p-3 border border-gray-200 rounded-xl text-sm outline-none" />
+        </div>
+
+        {/* Description */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">الوصف</label>
+          <input type="text" value={desc} onChange={e => setDesc(e.target.value)}
+            className="w-full p-3 border border-gray-200 rounded-xl text-sm outline-none" />
+        </div>
+
+        {/* Save */}
+        <button onClick={handleSave} disabled={!amount || parseFloat(amount) <= 0}
+          className={`w-full bg-${color}-600 text-white py-4 rounded-xl font-bold disabled:opacity-50 active:scale-[0.98]`}>
+          حفظ التعديلات
+        </button>
+
+        {/* Delete */}
+        <button onClick={handleDelete}
+          className={`w-full py-3 rounded-xl font-bold text-sm transition-all ${confirmDelete ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 border border-red-200'}`}>
+          {confirmDelete ? '⚠️ تأكيد الحذف نهائياً' : '🗑️ حذف المعاملة'}
+        </button>
       </div>
     </Modal>
   );

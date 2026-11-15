@@ -291,6 +291,40 @@ export function addTransfer(amount: number, fromWalletId: string, toWalletId: st
   });
 }
 
+export function updateTransaction(id: string, updates: Partial<Transaction>): Transaction {
+  const txns = getTransactions();
+  const idx = txns.findIndex(t => t.id === id);
+  if (idx === -1) throw new Error('Transaction not found');
+  const old = txns[idx];
+
+  // 1. Reverse old wallet effects
+  if (old.type === 'income') {
+    adjustWalletBalance(old.walletId, -old.amount);
+  } else if (old.type === 'expense') {
+    adjustWalletBalance(old.walletId, old.amount);
+  } else if (old.type === 'transfer' && old.targetWalletId) {
+    adjustWalletBalance(old.walletId, old.amount);
+    adjustWalletBalance(old.targetWalletId, -old.amount);
+  }
+
+  // 2. Apply updates
+  const updated = { ...old, ...updates };
+  txns[idx] = updated;
+  setStore(STORAGE_KEYS.transactions, txns);
+
+  // 3. Apply new wallet effects
+  if (updated.type === 'income') {
+    adjustWalletBalance(updated.walletId, updated.amount);
+  } else if (updated.type === 'expense') {
+    adjustWalletBalance(updated.walletId, -updated.amount);
+  } else if (updated.type === 'transfer' && updated.targetWalletId) {
+    adjustWalletBalance(updated.walletId, -updated.amount);
+    adjustWalletBalance(updated.targetWalletId, updated.amount);
+  }
+
+  return updated;
+}
+
 export function deleteTransaction(id: string): void {
   const txns = getTransactions();
   const txn = txns.find(t => t.id === id);
