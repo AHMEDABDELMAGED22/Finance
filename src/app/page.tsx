@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useApp } from '@/contexts/AppContext';
 import { formatCurrency, formatDate, getToday, getDaysUntil, getWalletIcon } from '@/lib/utils';
 import Modal from '@/components/Modal';
@@ -8,6 +8,10 @@ import Modal from '@/components/Modal';
 export default function Dashboard() {
   const app = useApp();
   const [activeModal, setActiveModal] = useState<string | null>(null);
+
+  useEffect(() => {
+    app.refreshData();
+  }, []);
 
   return (
     <div className="px-4 pt-6 pb-24 space-y-4">

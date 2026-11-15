@@ -65,6 +65,8 @@ export interface Transaction {
   targetWalletId?: string;
   incomeSourceId?: string;
   lessonId?: string;
+  paymentId?: string;
+  settlementId?: string;
   description?: string;
   date: string;
   createdAt: string;
@@ -145,6 +147,7 @@ export interface StudentPayment {
   walletId?: string;
   myShare?: number;
   centerShare?: number;
+  transactionId?: string;
   notes?: string;
   createdAt: string;
 }
@@ -155,6 +158,7 @@ export interface CenterSettlement {
   date: string;
   amount: number;
   walletId: string;
+  transactionId?: string;
   notes?: string;
   createdAt: string;
 }

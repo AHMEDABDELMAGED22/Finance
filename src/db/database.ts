@@ -243,6 +243,7 @@ export function deleteLesson(id: string): void {
 // ==================== Transactions ====================
 
 export function getTransactions(): Transaction[] {
+  reconcilePaymentsAndSettlements();
   return getStore<Transaction>(STORAGE_KEYS.transactions);
 }
 
@@ -617,14 +618,33 @@ export function getStudentPayments(centerId?: string, studentId?: string): Stude
 
 export function addStudentPayment(payment: Omit<StudentPayment, 'id' | 'createdAt'>): StudentPayment {
   const payments = getStore<StudentPayment>(CENTER_KEYS.payments);
-  const p: StudentPayment = { ...payment, id: generateId(), createdAt: new Date().toISOString() };
-  payments.push(p);
-  setStore(CENTER_KEYS.payments, payments);
-  // If received by me, add to wallet
+  const pId = generateId();
+  const p: StudentPayment = { ...payment, id: pId, createdAt: new Date().toISOString() };
+  
+  // If received by me, add to wallet and create Income Transaction
   if (p.receivedBy === 'me' && p.walletId) {
     const amountToWallet = p.myShare != null ? p.myShare : p.amount;
     adjustWalletBalance(p.walletId, amountToWallet);
+
+    const student = getCenterStudents().find(s => s.id === p.studentId);
+    const center = getIncomeSources().find(s => s.id === p.centerId);
+    const studentName = student?.name || 'طالب';
+    const centerName = center?.nameAr || '';
+
+    const txn = addTransaction({
+      type: 'income',
+      amount: amountToWallet,
+      walletId: p.walletId,
+      incomeSourceId: p.centerId,
+      paymentId: p.id,
+      date: p.date,
+      description: `تحصيل: ${studentName}${centerName ? ` (${centerName})` : ''}`,
+    });
+    p.transactionId = txn.id;
   }
+
+  payments.push(p);
+  setStore(CENTER_KEYS.payments, payments);
   return p;
 }
 
@@ -634,6 +654,10 @@ export function deleteStudentPayment(id: string): void {
   if (p && p.receivedBy === 'me' && p.walletId) {
     const amountToReverse = p.myShare != null ? p.myShare : p.amount;
     adjustWalletBalance(p.walletId, -amountToReverse);
+
+    // Remove associated transaction
+    const txns = getTransactions().filter(t => t.paymentId !== id && t.id !== p.transactionId);
+    setStore(STORAGE_KEYS.transactions, txns);
   }
   setStore(CENTER_KEYS.payments, payments.filter(x => x.id !== id));
 }
@@ -647,19 +671,105 @@ export function getCenterSettlements(centerId?: string): CenterSettlement[] {
 
 export function addCenterSettlement(settlement: Omit<CenterSettlement, 'id' | 'createdAt'>): CenterSettlement {
   const settlements = getStore<CenterSettlement>(CENTER_KEYS.settlements);
-  const s: CenterSettlement = { ...settlement, id: generateId(), createdAt: new Date().toISOString() };
+  const sId = generateId();
+  const s: CenterSettlement = { ...settlement, id: sId, createdAt: new Date().toISOString() };
+  
+  // Add to wallet and create Income Transaction
+  adjustWalletBalance(s.walletId, s.amount);
+
+  const center = getIncomeSources().find(src => src.id === s.centerId);
+  const centerName = center?.nameAr || 'سنتر';
+  const txn = addTransaction({
+    type: 'income',
+    amount: s.amount,
+    walletId: s.walletId,
+    incomeSourceId: s.centerId,
+    settlementId: s.id,
+    date: s.date,
+    description: `تسوية من: ${centerName}`,
+  });
+  s.transactionId = txn.id;
+
   settlements.push(s);
   setStore(CENTER_KEYS.settlements, settlements);
-  // Add to wallet
-  adjustWalletBalance(s.walletId, s.amount);
   return s;
 }
 
 export function deleteCenterSettlement(id: string): void {
   const settlements = getStore<CenterSettlement>(CENTER_KEYS.settlements);
   const s = settlements.find(x => x.id === id);
-  if (s) adjustWalletBalance(s.walletId, -s.amount);
+  if (s) {
+    adjustWalletBalance(s.walletId, -s.amount);
+    const txns = getTransactions().filter(t => t.settlementId !== id && t.id !== s.transactionId);
+    setStore(STORAGE_KEYS.transactions, txns);
+  }
   setStore(CENTER_KEYS.settlements, settlements.filter(x => x.id !== id));
+}
+
+// Reconcile any past payments or settlements created before this update
+export function reconcilePaymentsAndSettlements(): void {
+  if (typeof window === 'undefined') return;
+  const payments = getStore<StudentPayment>(CENTER_KEYS.payments);
+  const settlements = getStore<CenterSettlement>(CENTER_KEYS.settlements);
+  let txns = getStore<Transaction>(STORAGE_KEYS.transactions);
+  let txnsModified = false;
+
+  payments.forEach(p => {
+    if (p.receivedBy === 'me' && p.walletId && p.amount > 0) {
+      const amountToWallet = p.myShare != null ? p.myShare : p.amount;
+      const hasTxn = txns.some(t => t.paymentId === p.id || (p.transactionId && t.id === p.transactionId));
+      if (!hasTxn) {
+        const student = getCenterStudents().find(s => s.id === p.studentId);
+        const center = getIncomeSources().find(s => s.id === p.centerId);
+        const studentName = student?.name || 'طالب';
+        const centerName = center?.nameAr || '';
+        const newTxn: Transaction = {
+          id: generateId(),
+          type: 'income',
+          amount: amountToWallet,
+          walletId: p.walletId,
+          incomeSourceId: p.centerId,
+          paymentId: p.id,
+          date: p.date,
+          description: `تحصيل: ${studentName}${centerName ? ` (${centerName})` : ''}`,
+          createdAt: p.createdAt || new Date().toISOString(),
+        };
+        txns.push(newTxn);
+        p.transactionId = newTxn.id;
+        txnsModified = true;
+      }
+    }
+  });
+
+  settlements.forEach(s => {
+    if (s.walletId && s.amount > 0) {
+      const hasTxn = txns.some(t => t.settlementId === s.id || (s.transactionId && t.id === s.transactionId));
+      if (!hasTxn) {
+        const center = getIncomeSources().find(src => src.id === s.centerId);
+        const centerName = center?.nameAr || 'سنتر';
+        const newTxn: Transaction = {
+          id: generateId(),
+          type: 'income',
+          amount: s.amount,
+          walletId: s.walletId,
+          incomeSourceId: s.centerId,
+          settlementId: s.id,
+          date: s.date,
+          description: `تسوية من: ${centerName}`,
+          createdAt: s.createdAt || new Date().toISOString(),
+        };
+        txns.push(newTxn);
+        s.transactionId = newTxn.id;
+        txnsModified = true;
+      }
+    }
+  });
+
+  if (txnsModified) {
+    setStore(STORAGE_KEYS.transactions, txns);
+    setStore(CENTER_KEYS.payments, payments);
+    setStore(CENTER_KEYS.settlements, settlements);
+  }
 }
 
 // ==================== Export / Import ====================

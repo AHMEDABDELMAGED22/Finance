@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import * as db from '@/db/database';
 import { formatCurrency, formatDate, getToday, getWalletIcon } from '@/lib/utils';
 import Modal from '@/components/Modal';
+import { useApp } from '@/contexts/AppContext';
 import { IncomeSource, CenterStudent, StudentSession, StudentPayment, CenterSettlement, Wallet, Transaction } from '@/db/types';
 
 type Tab = 'students' | 'reports' | 'settlements' | 'rentals';
@@ -17,6 +18,7 @@ const FAROUK_GROUPS = [
 ] as const;
 
 export default function CenterDetailPage() {
+  const app = useApp();
   const params = useParams();
   const router = useRouter();
   const centerId = params.centerId as string;
@@ -57,7 +59,8 @@ export default function CenterDetailPage() {
     if (centerId === 'src_4geeks') {
       setRentals(db.getCenterExpenses('src_4geeks'));
     }
-  }, [centerId]);
+    app.refreshData();
+  }, [centerId, app]);
 
   useEffect(() => { refresh(); setMounted(true); }, [refresh]);
 

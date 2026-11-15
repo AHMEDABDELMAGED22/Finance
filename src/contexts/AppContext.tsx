@@ -71,6 +71,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     refreshData();
     setMounted(true);
+
+    const handleSync = () => {
+      refreshData();
+    };
+    window.addEventListener('storage', handleSync);
+    window.addEventListener('focus', handleSync);
+    window.addEventListener('visibilitychange', handleSync);
+    return () => {
+      window.removeEventListener('storage', handleSync);
+      window.removeEventListener('focus', handleSync);
+      window.removeEventListener('visibilitychange', handleSync);
+    };
   }, [refreshData]);
 
   const totalBalance = wallets.reduce((sum, w) => sum + w.balance, 0);
